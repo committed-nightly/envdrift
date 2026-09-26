@@ -52,6 +52,8 @@ $ envdrift .env
       'hello\nworld'    node, npm-dotenv, python-dotenv, ruby-dotenv, compose
       'hello\\nworld'   bash
 
+parsers: npm-dotenv 18.0.4, python-dotenv 1.2.3, ruby-dotenv 2.8.1
+
 read the file, and complained
   bash  sourced, exit 127: line 5: CACHE_TTL: command not found
 
@@ -114,13 +116,31 @@ they run against the real parsers.
 | `A="$B"` (B=zzz) | `$B` | `$B` | `zzz` | `zzz` | `zzz` |
 | `A="${B}"` (B=zzz) | `${B}` | `zzz` | `zzz` | `zzz` | `zzz` |
 | ``A=`echo P` `` | `echo P` | `` `echo P` `` | `` `echo P` `` | `` `echo P` `` | `P` |
-| `A="a\nb"` | newline | newline | newline | newline | literal `\n` |
+| `A="a\nb"` | newline | newline | newline † | newline | literal `\n` |
 | `A=1␍` (CRLF) | `1` | `1` | `1` | `1` | `1␍` |
 | `A=a b` | `a b` | `a b` | `a b` | `a b` | *not set* |
 | `A = 1` | `1` | `1` | `1` | `1` | *not set* |
 | `A="oops` | `"oops` | *not set* | `"oops` | **rejects the file** | *not set* |
 
-Three worth pulling out:
+† On the `dotenv` gem 2.8.1. Version 3.2.0 leaves the backslash alone, which
+is the next paragraph.
+
+### A parser can also disagree with itself
+
+That `†` was not planned. The table was measured on a box with the `dotenv` gem
+2.8.1, CI installed 3.2.0, and the suite went red on exactly one cell: 2.x
+expands `\n` inside double quotes and 3.x does not.
+
+So "ruby-dotenv said `a\nb`" is only half an answer. envdrift prints a
+`parsers:` line with the version of everything that reported one, because the
+version is part of the result — your laptop and your CI runner can be running
+different parsers under the same name.
+
+`tests/test_engines.py` records this as an explicit `OneOf` with the reason
+attached, rather than by pinning a gem version in CI. Pinning would have made
+the suite agree with itself and stop reporting the one thing it had found.
+
+Three more worth pulling out:
 
 - **`A=1#two`.** Half of them call the `#` a comment and half keep it. Put a
   `#` in a password or a URL fragment and two of your tools have a different

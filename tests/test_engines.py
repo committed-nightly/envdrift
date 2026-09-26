@@ -17,6 +17,22 @@ from .conftest import parse
 ABSENT = object()
 REJECTED = object()
 
+
+class OneOf:
+    """More than one right answer, because the parser changed its mind.
+
+    Used where a single engine gives different results across its own released
+    versions. The alternative is pinning a version in CI, which would make the
+    suite agree with itself and stop telling us anything.
+    """
+
+    def __init__(self, *options, because):
+        self.options = options
+        self.because = because
+
+    def __repr__(self):
+        return f"one of {self.options!r} ({self.because})"
+
 #: case name -> (file body, {engine: expected value for key "A"})
 CASES = {
     # A `#` with no space before it. Three parsers call it a comment, three
@@ -89,7 +105,14 @@ CASES = {
             "node": "a\nb",
             "npm-dotenv": "a\nb",
             "python-dotenv": "a\nb",
-            "ruby-dotenv": "a\nb",
+            # The gem changed its mind between majors: 2.8.1 expands this to a
+            # newline, 3.2.0 leaves the backslash alone. Found by CI disagreeing
+            # with the box it was written on.
+            "ruby-dotenv": OneOf(
+                "a\nb",
+                "a\\nb",
+                because="dotenv 2.x expands \\n inside double quotes, 3.x does not",
+            ),
             "compose": "a\nb",
             "bash": "a\\nb",
         },
@@ -170,8 +193,17 @@ def test_engine_behaviour(envfile, body, engine_name, want):
     assert result.values is not None
     if want is ABSENT:
         assert "A" not in result.values, f"expected no A, got {result.values['A']!r}"
+    elif isinstance(want, OneOf):
+        got = result.values.get("A")
+        assert got in want.options, (
+            f"{engine_name} {result.version or '(version unknown)'} gave {got!r}; "
+            f"expected {want.because}"
+        )
     else:
-        assert result.values.get("A") == want
+        assert result.values.get("A") == want, (
+            f"{engine_name} {result.version or '(version unknown)'} "
+            f"gave {result.values.get('A')!r}"
+        )
 
 
 # --- the properties, rather than the table ---------------------------------

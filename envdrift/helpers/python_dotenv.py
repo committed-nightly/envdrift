@@ -18,6 +18,16 @@ except ImportError as exc:
     out({"unavailable": "python-dotenv is not installed: %s" % exc})
     sys.exit(0)
 
+def _version():
+    # python-dotenv exposes no __version__, so ask the installed metadata.
+    try:
+        from importlib.metadata import version
+
+        return version("python-dotenv")
+    except Exception:  # noqa: BLE001 - a missing version is not worth failing over
+        return None
+
+
 try:
     values = dotenv.dotenv_values(sys.argv[1])
     # dotenv_values yields None for a bare `KEY` with no `=`. Every other engine
@@ -26,7 +36,7 @@ try:
         {
             "values": {k: v for k, v in values.items() if v is not None},
             "valueless_keys": sorted(k for k, v in values.items() if v is None),
-            "version": getattr(dotenv, "__version__", None),
+            "version": _version(),
         }
     )
 except Exception as exc:  # noqa: BLE001 - report whatever the parser raised

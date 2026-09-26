@@ -40,6 +40,16 @@ def to_text(cmp: Comparison, show_all: bool = False, redact: bool = False) -> st
     for row in rows:
         lines.extend(_render_row(row, redact))
 
+    versioned = [r for r in sorted(cmp.ran, key=_by_name) if r.version]
+    if versioned:
+        # Worth a line: the Ruby dotenv gem stopped expanding \n inside double
+        # quotes between 2.8 and 3.2, so "ruby-dotenv said X" is only half an
+        # answer without knowing which ruby-dotenv.
+        lines.append("")
+        lines.append(
+            "parsers: " + ", ".join(f"{r.engine} {r.version}" for r in versioned)
+        )
+
     noted = [r for r in sorted(cmp.ran, key=_by_name) if r.note]
     if noted:
         lines.append("")

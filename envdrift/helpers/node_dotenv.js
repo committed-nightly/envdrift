@@ -29,5 +29,25 @@ try {
 }
 
 function versionOf(req) {
-  try { return req('dotenv/package.json').version; } catch (e) { return null; }
+  // dotenv's `exports` map does not expose package.json, so requiring it by
+  // subpath fails on recent versions. Walk up from the resolved entry point.
+  try {
+    return req('dotenv/package.json').version;
+  } catch (e) {
+    try {
+      let dir = path.dirname(req.resolve('dotenv'));
+      for (let i = 0; i < 5; i++) {
+        const candidate = path.join(dir, 'package.json');
+        if (fs.existsSync(candidate)) {
+          return JSON.parse(fs.readFileSync(candidate, 'utf8')).version || null;
+        }
+        const up = path.dirname(dir);
+        if (up === dir) break;
+        dir = up;
+      }
+    } catch (e2) {
+      return null;
+    }
+    return null;
+  }
 }
