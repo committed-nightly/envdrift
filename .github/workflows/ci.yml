@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install envdrift and the test extra
+        run: pip install -e '.[test]'
+
+      - name: Install the parsers envdrift compares
+        run: |
+          npm install dotenv --no-save --no-fund --no-audit
+          pip install python-dotenv
+          sudo gem install dotenv --no-document
+
+      - name: Every engine must be available
+        # The engine tests skip themselves when a parser is missing, so without
+        # this the suite would go green having compared nothing. A skipped
+        # engine is silence, and silence reads the same as agreement.
+        run: |
+          envdrift --list-engines
+          if envdrift --list-engines | grep -q unavailable; then
+            echo "::error::an engine is unavailable; the engine tests would skip"
+            exit 1
+          fi
+
+      - name: Tests
+        run: pytest -rs
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: actionlint
+        # logbook#23: nothing in the org ran this, and a workflow that does not
+        # compile produces no jobs, no logs and no annotations to find it by.
+        run: |
+          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      - name: shellcheck the bash helper
+        run: shellcheck envdrift/helpers/bash_source.sh
