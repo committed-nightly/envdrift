@@ -71,9 +71,8 @@ def _selected(names: str | None) -> list:
     unknown = [n for n in wanted if n not in BY_NAME]
     if unknown:
         known = ", ".join(e.name for e in ENGINES)
-        raise SystemExit(
-            f"envdrift: no such engine: {', '.join(unknown)}\n"
-            f"envdrift: engines are: {known}"
+        raise ValueError(
+            f"no such engine: {', '.join(unknown)}\nenvdrift: engines are: {known}"
         )
     # Keep the declared order rather than the order they were typed in, so two
     # runs of the same set read the same way.
@@ -106,6 +105,17 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     if args.list_engines:
         return _list_engines(out)
 
+    # Argument errors before filesystem errors: a typo in --engines should be
+    # reported as a typo, not hidden behind a path that also happens to be wrong.
+    try:
+        engines = _selected(args.engines)
+    except ValueError as exc:
+        err.write(f"envdrift: {exc}\n")
+        return 2
+    if not engines:
+        err.write("envdrift: no engines selected\n")
+        return 2
+
     if not args.file:
         err.write("envdrift: give me a .env file to read (or --list-engines)\n")
         return 2
@@ -121,26 +131,26 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         err.write(f"envdrift: {path}: {exc}\n")
         return 2
 
-    engines = _selected(args.engines)
-    if not engines:
-        err.write("envdrift: no engines selected\n")
-        return 2
-
     found = hazards.scan(text)
     result = compare.run_all(path, engines, found, unsafe=args.unsafe)
-
-    if not result.ran:
-        if args.json:
-            out.write(report.to_json(result, redact=args.redact))
-        else:
-            out.write(report.to_text(result, show_all=args.show_all, redact=args.redact))
-        err.write("envdrift: no parser could read this file; nothing to compare\n")
-        return 2
 
     if args.json:
         out.write(report.to_json(result, redact=args.redact))
     else:
         out.write(report.to_text(result, show_all=args.show_all, redact=args.redact))
+
+    # One engine agreeing with itself is not agreement. Exiting 0 there would
+    # report a box with nothing installed on it as a clean bill of health, which
+    # is the failure this tool would be most embarrassed by.
+    if len(result.ran) < 2 and not result.split_on_validity:
+        if not result.ran:
+            err.write("envdrift: no parser read this file; nothing to compare\n")
+        else:
+            err.write(
+                f"envdrift: only {result.ran[0].engine} read this file; "
+                "nothing to compare it against\n"
+            )
+        return 2
 
     return 1 if result.drifted else 0
 

@@ -40,6 +40,14 @@ def to_text(cmp: Comparison, show_all: bool = False, redact: bool = False) -> st
     for row in rows:
         lines.extend(_render_row(row, redact))
 
+    noted = [r for r in sorted(cmp.ran, key=_by_name) if r.note]
+    if noted:
+        lines.append("")
+        lines.append("read the file, and complained")
+        width = max(len(r.engine) for r in noted)
+        for result in noted:
+            lines.append(f"  {result.engine:<{width}}  {result.note}")
+
     executed = _executed_lines(cmp)
     if executed:
         lines.append("")
@@ -60,7 +68,10 @@ def to_text(cmp: Comparison, show_all: bool = False, redact: bool = False) -> st
             lines.append(f"  {result.engine:<{width}}  {getattr(result, attr)}")
 
     lines.append("")
-    if len(cmp.ran) < 2:
+    if len(cmp.ran) < 2 and not cmp.split_on_validity:
+        # One parser reading a file that another rejected is a comparison, and
+        # the most interesting one there is -- so it does not count as "nothing
+        # to compare" even though only one engine produced any keys.
         lines.append(
             "fewer than two parsers read this file, so there was nothing to compare"
         )
@@ -158,7 +169,8 @@ def to_json(cmp: Comparison, redact: bool = False) -> str:
         ],
         "engines": {
             "ran": [
-                {"engine": r.engine, "version": r.version} for r in sorted(cmp.ran, key=_by_name)
+                {"engine": r.engine, "version": r.version, "note": r.note}
+                for r in sorted(cmp.ran, key=_by_name)
             ],
             "rejected": [
                 {"engine": r.engine, "error": r.error} for r in sorted(cmp.errored, key=_by_name)

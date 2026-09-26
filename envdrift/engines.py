@@ -43,6 +43,9 @@ class Result:
     version: str | None = None
     #: Keys the engine accepted without a value at all, e.g. a bare `KEY` line.
     valueless_keys: tuple[str, ...] = ()
+    #: The engine produced values *and* complained. Worth printing: `set -a; .
+    #: file` on `A=a b` assigns A=a and then reports `b: command not found`.
+    note: str | None = None
 
     @property
     def ran(self) -> bool:
@@ -254,6 +257,7 @@ def _bash_source(path: Path) -> Result:
     with tempfile.TemporaryDirectory(prefix="envdrift-bash-") as tmp:
         before = Path(tmp) / "before"
         after = Path(tmp) / "after"
+        status = Path(tmp) / "status"
         try:
             proc = subprocess.run(
                 [
@@ -266,6 +270,7 @@ def _bash_source(path: Path) -> Result:
                     str(path.resolve()),
                     str(before),
                     str(after),
+                    str(status),
                 ],
                 capture_output=True,
                 text=True,
@@ -277,20 +282,48 @@ def _bash_source(path: Path) -> Result:
         except OSError as exc:
             return Result(name, unavailable=str(exc))
 
-        if proc.returncode != 0 or not after.exists():
-            lines = [ln for ln in proc.stderr.strip().splitlines() if ln.strip()]
-            tail = lines[-1] if lines else f"source failed (exit {proc.returncode})"
-            return Result(name, error=tail[:300])
+        complaints = [ln for ln in proc.stderr.strip().splitlines() if ln.strip()]
+        if not after.exists() or not after.stat().st_size:
+            # The shell died partway through: the file is not sourceable at all.
+            tail = complaints[-1] if complaints else f"source failed (exit {proc.returncode})"
+            return Result(name, error=_strip_path(tail, path)[:300])
 
         pre = _parse_env0(before.read_bytes())
         post = _parse_env0(after.read_bytes())
+        source_rc = 0
+        if status.exists():
+            try:
+                source_rc = int(status.read_text().strip() or 0)
+            except ValueError:
+                source_rc = 0
+        # Anything on stderr counts, not just a non-zero status. Sourcing
+        # `A=a b\nC=ok` returns 0, because `.` reports the status of the *last*
+        # command in the file -- and the complaint about `b` in the middle is
+        # the only trace that a line did not do what it looks like it does.
+        note = None
+        if complaints or source_rc != 0:
+            detail = _strip_path(complaints[-1], path) if complaints else ""
+            note = f"sourced, exit {source_rc}"
+            if detail:
+                note += f": {detail}"
 
     # `_` is bash's own last-argument variable and changes between the two dumps
     # for reasons that have nothing to do with the file.
     post.pop("_", None)
     pre.pop("_", None)
     values = {k: v for k, v in post.items() if pre.get(k) != v}
-    return Result(name, values=values)
+    return Result(name, values=values, note=note)
+
+
+def _strip_path(message: str, path: Path) -> str:
+    """Drop the tmp-file path bash prefixes to its diagnostics.
+
+    It is a path envdrift chose, not one the user would recognise, and it makes
+    otherwise identical messages look different between runs.
+    """
+    for candidate in (str(path.resolve()), str(path)):
+        message = message.replace(candidate + ":", "").replace(candidate, "")
+    return message.strip()
 
 
 def _parse_env0(blob: bytes) -> dict[str, str]:
