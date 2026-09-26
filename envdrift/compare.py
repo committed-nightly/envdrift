@@ -90,6 +90,17 @@ class Comparison:
     def drifted(self) -> bool:
         return bool(self.disagreements) or self.split_on_validity
 
+    @property
+    def notable(self) -> bool:
+        """Anything worth a non-zero exit.
+
+        Holding an engine back counts. A file containing `$(...)` is the most
+        serious thing envdrift can find, and reporting "everyone agreed" about
+        the four parsers that do not execute it would be the wrong headline --
+        the two that were kept away from it are the story.
+        """
+        return self.drifted or bool(self.held_back)
+
 
 def _outcome_for(result: Result, key: str) -> Outcome:
     assert result.values is not None

@@ -80,7 +80,7 @@ def test_no_executed_section_when_no_engine_runs_the_construct():
 
 def test_summary_counts_the_disagreeing_keys():
     cmp = build("f", [r("a", {"X": "1", "Y": "1"}), r("b", {"X": "2", "Y": "1"})])
-    assert "1 of 2 keys differ between parsers" in to_text(cmp)
+    assert "1 of 2 keys differs between parsers" in to_text(cmp)
 
 
 def test_summary_says_so_when_everyone_agreed():
@@ -119,3 +119,20 @@ def test_json_shape_is_stable():
         {"engine": "b", "version": None, "note": None},
     ]
     assert payload["hazards"][0]["line"] == 1
+
+
+def test_held_back_alone_is_notable_even_when_everyone_else_agreed():
+    cmp = build(
+        "f",
+        [r("a", {"K": "$(id)"}), r("b", {"K": "$(id)"}), r("bash", held_back="would execute")],
+    )
+    assert not cmp.drifted
+    assert cmp.notable
+    text = to_text(cmp)
+    assert "agreed on every one of" in text
+    assert "held back from a file it would execute" in text
+
+
+def test_one_disagreeing_key_uses_the_singular_verb():
+    cmp = build("f", [r("a", {"X": "1"}), r("b", {"X": "2"})])
+    assert "1 of 1 key differs between parsers" in to_text(cmp)

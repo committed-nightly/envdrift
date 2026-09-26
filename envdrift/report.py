@@ -75,24 +75,30 @@ def to_text(cmp: Comparison, show_all: bool = False, redact: bool = False) -> st
         lines.append(
             "fewer than two parsers read this file, so there was nothing to compare"
         )
-    elif cmp.drifted:
+    else:
         summary = []
         if cmp.disagreements:
+            n = len(cmp.disagreements)
             summary.append(
-                f"{len(cmp.disagreements)} of {_plural(len(cmp.rows), 'key')} "
-                f"differ between parsers"
+                f"{n} of {_plural(len(cmp.rows), 'key')} "
+                f"{'differs' if n == 1 else 'differ'} between parsers"
             )
         if cmp.split_on_validity:
             summary.append(
                 f"{_plural(len(cmp.errored), 'parser')} rejected the file that "
                 f"{_plural(len(cmp.ran), 'parser')} read"
             )
+        if not cmp.drifted:
+            summary.append(
+                f"{_plural(len(cmp.ran), 'parser')} agreed on every one of "
+                f"{_plural(len(cmp.rows), 'key')}"
+            )
+        if cmp.held_back:
+            summary.append(
+                f"{_plural(len(cmp.held_back), 'parser')} held back from a file "
+                f"{'it' if len(cmp.held_back) == 1 else 'they'} would execute"
+            )
         lines.append("; ".join(summary))
-    else:
-        lines.append(
-            f"{_plural(len(cmp.ran), 'parser')} agreed on every one of "
-            f"{_plural(len(cmp.rows), 'key')}"
-        )
     return "\n".join(lines) + "\n"
 
 
@@ -156,6 +162,7 @@ def to_json(cmp: Comparison, redact: bool = False) -> str:
     payload = {
         "path": cmp.path,
         "drifted": cmp.drifted,
+        "notable": cmp.notable,
         "keys": [
             {
                 "key": row.key,

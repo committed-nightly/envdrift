@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             )
         return 2
 
-    return 1 if result.drifted else 0
+    return 1 if result.notable else 0
 
 
 if __name__ == "__main__":  # pragma: no cover

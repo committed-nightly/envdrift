@@ -117,3 +117,13 @@ def test_unsafe_lets_them_run_and_says_which_line_was_executed(envfile):
         pytest.skip(err.strip())
     assert "executed, not read" in out
     assert "line 1" in out
+
+
+@pytest.mark.engine
+def test_a_file_that_would_be_executed_exits_nonzero(envfile):
+    path = envfile("A=$(echo PWNED)\n")
+    code, out, err = run([str(path)])
+    if code == 2:
+        pytest.skip(err.strip())
+    assert code == 1, out
+    assert "held back" in out
