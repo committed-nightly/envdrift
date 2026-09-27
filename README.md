@@ -77,10 +77,55 @@ envdrift --engines node,compose .env
 envdrift --list-engines
 ```
 
-`.env` files are full of secrets and envdrift prints values. Use `--redact`
-when the output is going anywhere you would not paste the file itself; it
-prints a short digest and a length, which is enough to tell two outcomes apart
-and not enough to be a leak.
+## Redacting the values
+
+`.env` files are full of secrets and envdrift prints values. `--redact`
+replaces every value with a keyed digest, so a report can still say *these
+three parsers disagree with those three about `DB_PASSWORD`, and one group kept
+two more characters* without saying what the password is:
+
+```
+$ envdrift --redact .env
+.env — 4 keys, 6 of 6 parsers read it
+
+  DB_PASSWORD  —  2 outcomes
+      <762f5461>             node, npm-dotenv, ruby-dotenv
+      <a57da94a, +2 chars>   python-dotenv, compose, bash
+
+redacted: digests are keyed by a random per-run salt, so they separate
+  outcomes inside this report and match nothing outside it. Set
+  ENVDRIFT_REDACT_SALT to a secret to compare runs.
+  Lengths are relative to the shortest outcome for that key.
+```
+
+The key is random bytes generated for that run and never printed, which is what
+makes a digest safe to paste at all. **An unkeyed hash of a `.env` value is
+not.** Values are short and drawn from small alphabets, so a truncated SHA-256
+is only the answer to a guessing game anyone holding the output can play: all
+one thousand three-digit strings sweep in about a millisecond, and the four
+characters of `s3cr` fall to the full lowercase-and-digits keyspace in under a
+second on one CPU. Printing the exact length hands over the size of that
+keyspace as well, which is why lengths here are relative to the shortest
+outcome for the key (`+2 chars`) rather than absolute — the difference is the
+finding, and the absolute length is a hint about the value.
+
+The cost of a per-run key is that two runs are not comparable. When comparing
+them is the point — a staging file against production, today against yesterday
+— put a secret of your own in `ENVDRIFT_REDACT_SALT` and the digests become
+stable for anyone holding it:
+
+```
+$ ENVDRIFT_REDACT_SALT="$(cat /run/secrets/envdrift-salt)" envdrift --redact --json .env
+```
+
+An environment variable rather than a flag, because arguments are
+world-readable in `/proc` on Linux and land in shell history. Use a long one: a
+short salt can be guessed alongside a short value, which is the whole problem
+back again, and envdrift says so in its output when yours is under 16 bytes.
+
+`--redact` withholds values, not structure. Key names, line numbers, which
+parsers disagreed and every hazard line are all still in the output. If the key
+names are themselves the secret, this is not the tool you want.
 
 ## The parsers
 
@@ -217,14 +262,19 @@ pip install -e '.[test]'
 pytest
 ```
 
-The suite splits in two. `test_compare.py`, `test_report.py` and
-`test_hazards.py` need nothing installed. `test_engines.py` runs the real
+The suite splits in two. `test_compare.py`, `test_report.py`, `test_hazards.py`
+and `test_redact.py` need nothing installed. `test_engines.py` runs the real
 parsers, and each case skips itself when its engine is missing — so a clean run
 on a bare box is mostly skips, and `pytest -rs` will tell you what you are not
 covering.
 
 To get all six locally: `npm install dotenv`, `pip install python-dotenv`,
 `gem install dotenv`, and Docker.
+
+If you are working in a virtualenv, `python-dotenv` has to go *inside* it. The
+`python-dotenv` engine runs the interpreter the suite is running under, so a
+copy installed system-wide is invisible to it and that engine's cases skip
+while the other five run.
 
 ## Licence
 
