@@ -2,32 +2,43 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 from .compare import ABSENT, VALUELESS, Comparison, KeyRow, Outcome, _Sentinel
+from .redact import DIGEST_CHARS, SALT_ENV, Redactor
 
 MAX_VALUE = 120
-
-
-def show(outcome: Outcome, redact: bool = False) -> str:
-    if isinstance(outcome, _Sentinel):
-        return outcome.label
-    if redact:
-        # Enough to tell two outcomes apart, not enough to be a leaked secret.
-        digest = hashlib.sha256(outcome.encode("utf-8", "surrogateescape")).hexdigest()[:8]
-        return f"<{digest}, {len(outcome)} chars>"
-    text = repr(outcome)
-    if len(text) > MAX_VALUE:
-        return text[: MAX_VALUE - 4] + "..." + text[-1]
-    return text
 
 
 def _plural(n: int, one: str, many: str | None = None) -> str:
     return f"{n} {one}" if n == 1 else f"{n} {many or one + 's'}"
 
 
-def to_text(cmp: Comparison, show_all: bool = False, redact: bool = False) -> str:
+def show(outcome: Outcome, redactor: Redactor | None = None, baseline: int | None = None) -> str:
+    if isinstance(outcome, _Sentinel):
+        return outcome.label
+    if redactor is not None:
+        # Relative length, not absolute. What a reader needs from a redacted
+        # row is "these two outcomes differ, and by how much" -- a trailing \r
+        # or an expanded \n shows up as +1. The absolute length was never the
+        # useful half, and it narrows the search for the value itself.
+        extra = ""
+        if baseline is not None and len(outcome) > baseline:
+            extra = f", +{_plural(len(outcome) - baseline, 'char')}"
+        return f"<{redactor.digest(outcome)}{extra}>"
+    text = repr(outcome)
+    if len(text) > MAX_VALUE:
+        return text[: MAX_VALUE - 4] + "..." + text[-1]
+    return text
+
+
+def _baseline_length(row: KeyRow) -> int | None:
+    """The shortest real value for this key, which every other one is measured from."""
+    lengths = [len(g.outcome) for g in row.groups if not isinstance(g.outcome, _Sentinel)]
+    return min(lengths) if lengths else None
+
+
+def to_text(cmp: Comparison, show_all: bool = False, redactor: Redactor | None = None) -> str:
     lines: list[str] = []
     total_engines = len(cmp.ran) + len(cmp.errored) + len(cmp.unavailable) + len(cmp.held_back)
     head = f"{cmp.path} — {_plural(len(cmp.rows), 'key')}, "
@@ -38,7 +49,13 @@ def to_text(cmp: Comparison, show_all: bool = False, redact: bool = False) -> st
     if rows:
         lines.append("")
     for row in rows:
-        lines.extend(_render_row(row, redact))
+        lines.extend(_render_row(row, redactor))
+
+    if redactor is not None and rows:
+        # Right under the rows it explains, because a reader meeting
+        # `<a3f9c1d2, +2 chars>` for the first time needs it there.
+        lines.append("")
+        lines.extend(redactor.explain())
 
     versioned = [r for r in sorted(cmp.ran, key=_by_name) if r.version]
     if versioned:
@@ -137,14 +154,15 @@ def _executed_lines(cmp: Comparison) -> list[str]:
     return lines
 
 
-def _render_row(row: KeyRow, redact: bool) -> list[str]:
+def _render_row(row: KeyRow, redactor: Redactor | None) -> list[str]:
+    baseline = _baseline_length(row) if redactor is not None else None
     if row.agreed:
-        return [f"  {row.key}  =  {show(row.groups[0].outcome, redact)}"]
+        return [f"  {row.key}  =  {show(row.groups[0].outcome, redactor, baseline)}"]
     lines = [f"  {row.key}  —  {_plural(len(row.groups), 'outcome')}"]
-    width = max(len(show(g.outcome, redact)) for g in row.groups)
+    width = max(len(show(g.outcome, redactor, baseline)) for g in row.groups)
     width = min(width, MAX_VALUE)
     for group in row.groups:
-        rendered = show(group.outcome, redact)
+        rendered = show(group.outcome, redactor, baseline)
         lines.append(f"      {rendered:<{width}}   {', '.join(group.engines)}")
     return lines
 
@@ -153,19 +171,17 @@ def _by_name(result):
     return result.engine
 
 
-def to_json(cmp: Comparison, redact: bool = False) -> str:
-    def outcome_json(outcome: Outcome):
+def to_json(cmp: Comparison, redactor: Redactor | None = None) -> str:
+    def outcome_json(outcome: Outcome, baseline: int | None):
         if outcome is ABSENT:
             return {"kind": "absent"}
         if outcome is VALUELESS:
             return {"kind": "valueless"}
-        if redact:
+        if redactor is not None:
             return {
                 "kind": "value",
-                "sha256_8": hashlib.sha256(
-                    outcome.encode("utf-8", "surrogateescape")
-                ).hexdigest()[:8],
-                "length": len(outcome),
+                "digest": redactor.digest(outcome),
+                "longer_by": len(outcome) - baseline if baseline is not None else 0,
             }
         return {"kind": "value", "value": outcome}
 
@@ -178,7 +194,12 @@ def to_json(cmp: Comparison, redact: bool = False) -> str:
                 "key": row.key,
                 "agreed": row.agreed,
                 "outcomes": [
-                    {"outcome": outcome_json(g.outcome), "engines": list(g.engines)}
+                    {
+                        "outcome": outcome_json(
+                            g.outcome, _baseline_length(row) if redactor is not None else None
+                        ),
+                        "engines": list(g.engines),
+                    }
                     for g in row.groups
                 ],
             }
@@ -206,4 +227,14 @@ def to_json(cmp: Comparison, redact: bool = False) -> str:
             for h in cmp.hazards
         ],
     }
+    if redactor is not None:
+        # Present only when redacting, and it says which salt, because a
+        # consumer diffing two reports cannot otherwise tell a changed value
+        # from a changed key.
+        payload["redaction"] = {
+            "digest": f"hmac-sha256-{DIGEST_CHARS}",
+            "salt": SALT_ENV if redactor.from_env else "random-per-run",
+            "comparable_across_runs": redactor.from_env,
+            "length": "relative-to-shortest-outcome-per-key",
+        }
     return json.dumps(payload, indent=2, sort_keys=False) + "\n"

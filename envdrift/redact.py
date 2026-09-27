@@ -79,20 +79,22 @@ class Redactor:
         Without it a reader cannot tell whether two digests differing between
         two reports means the value changed or means the salt did.
         """
+        tail = "  Lengths are relative to the shortest outcome for that key."
         if self.from_env:
             lines = [
-                f"redacted: digests are keyed by {SALT_ENV}, so runs sharing that salt",
-                "  are comparable. Lengths are relative to the shortest outcome per key.",
+                f"redacted: digests are keyed by {SALT_ENV}, so two runs",
+                "  sharing that salt are comparable.",
+                tail,
             ]
             if self.weak_salt:
                 lines.append(
-                    f"  That salt is under {WEAK_SALT_BYTES} bytes — short enough to guess "
-                    "alongside a short value."
+                    f"  That salt is under {WEAK_SALT_BYTES} bytes, which is short enough"
                 )
+                lines.append("  to guess alongside a short value.")
             return lines
         return [
             "redacted: digests are keyed by a random per-run salt, so they separate",
-            "  outcomes inside this report and match nothing outside it. Set "
-            f"{SALT_ENV}",
-            "  to compare runs. Lengths are relative to the shortest outcome per key.",
+            "  outcomes inside this report and match nothing outside it. Set",
+            f"  {SALT_ENV} to a secret to compare runs.",
+            tail,
         ]
