@@ -4,6 +4,7 @@ import json
 import pytest
 
 from envdrift import cli
+from envdrift.redact import SALT_ENV
 
 
 def run(argv):
@@ -96,6 +97,51 @@ def test_redact_keeps_the_value_out_of_the_output(envfile):
         pytest.skip(err.strip())
     assert "swordfish" not in out
     assert code == 1
+
+
+@pytest.mark.engine
+def test_two_redacted_runs_of_the_same_file_do_not_match_by_default(envfile):
+    path = envfile("A=swordfish#two\n")
+    code, first, err = run(["--redact", str(path)])
+    if code == 2:
+        pytest.skip(err.strip())
+    _, second, _ = run(["--redact", str(path)])
+    assert first != second, "a fresh salt per run is the default"
+
+
+@pytest.mark.engine
+def test_the_salt_env_var_makes_two_runs_match(envfile, monkeypatch):
+    monkeypatch.setenv(SALT_ENV, "a-salt-long-enough-for-the-tests")
+    path = envfile("A=swordfish#two\n")
+    code, first, err = run(["--redact", str(path)])
+    if code == 2:
+        pytest.skip(err.strip())
+    _, second, _ = run(["--redact", str(path)])
+    assert first == second
+    assert "swordfish" not in first
+
+
+@pytest.mark.engine
+def test_the_salt_env_var_is_not_itself_leaked_into_the_output(envfile, monkeypatch):
+    # It is a secret the caller supplied, and envdrift's whole job here is not
+    # printing secrets.
+    monkeypatch.setenv(SALT_ENV, "sentinel-salt-value-not-for-printing")
+    path = envfile("A=swordfish#two\n")
+    code, out, err = run(["--redact", "--json", str(path)])
+    if code == 2:
+        pytest.skip(err.strip())
+    assert "sentinel-salt-value-not-for-printing" not in out
+    assert json.loads(out)["redaction"]["comparable_across_runs"] is True
+
+
+def test_the_salt_is_not_passed_through_to_the_parsers(envfile, monkeypatch):
+    # Engines run with a near-empty environment, and the salt must not be one of
+    # the things that survives into a subprocess that reads the file.
+    monkeypatch.setenv(SALT_ENV, "sentinel-salt-value-not-for-printing")
+    path = envfile("A=${%s}\n" % SALT_ENV)
+    code, out, err = run(["--redact", str(path)])
+    assert "sentinel-salt-value-not-for-printing" not in out
+    assert "sentinel-salt-value-not-for-printing" not in err
 
 
 @pytest.mark.engine

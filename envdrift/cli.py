@@ -14,13 +14,19 @@ from pathlib import Path
 
 from . import __version__, compare, hazards, report
 from .engines import BY_NAME, ENGINES
+from .redact import SALT_ENV, Redactor
 
-EPILOG = """\
+EPILOG = f"""\
 exit status: 0 if the parsers agree, 1 if they drift, 2 if envdrift could not run.
 
 envdrift prints the values it finds, and a .env file is usually full of
-secrets. Use --redact when the output is going anywhere you would not paste
-the file itself.
+secrets. --redact replaces each value with a digest keyed by a random per-run
+salt, which separates the outcomes without disclosing them. Digests from two
+runs are unrelated unless you set {SALT_ENV} to a secret of your own,
+which makes them comparable to anyone holding that salt.
+
+--redact is not an encryption of your file. It withholds the values; the key
+names, the line numbers and the shape of the disagreement are all still there.
 """
 
 
@@ -57,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--redact",
         action="store_true",
-        help="print a short digest instead of each value",
+        help="print a keyed digest instead of each value",
     )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--version", action="version", version=f"envdrift {__version__}")
@@ -134,10 +140,12 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     found = hazards.scan(text)
     result = compare.run_all(path, engines, found, unsafe=args.unsafe)
 
+    redactor = Redactor.build() if args.redact else None
+
     if args.json:
-        out.write(report.to_json(result, redact=args.redact))
+        out.write(report.to_json(result, redactor=redactor))
     else:
-        out.write(report.to_text(result, show_all=args.show_all, redact=args.redact))
+        out.write(report.to_text(result, show_all=args.show_all, redactor=redactor))
 
     # One engine agreeing with itself is not agreement. Exiting 0 there would
     # report a box with nothing installed on it as a clean bill of health, which
