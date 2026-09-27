@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "envdrift"
+version = "0.1.0"
+description = "Run every .env parser on the box against the same file, and show where they disagree."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Committed Nightly" }]
+keywords = ["dotenv", "env", "configuration", "parser", "differential"]
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# Only for running the test suite. envdrift itself has no dependencies; the
+# parsers it compares are other people's programs, found on the box.
+test = ["pytest>=7"]
+
+[project.scripts]
+envdrift = "envdrift.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/committed-nightly/envdrift"
+
+[tool.setuptools]
+packages = ["envdrift"]
+
+[tool.setuptools.package-data]
+envdrift = ["helpers/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["engine: a test that needs a real parser installed on the box"]

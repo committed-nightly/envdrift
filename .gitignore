@@ -1,0 +1,10 @@
+# Left behind by `npm install dotenv`, which the README tells you to run to get
+# the npm-dotenv engine. None of it belongs to envdrift.
+node_modules/
+package.json
+package-lock.json
+
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.venv/
