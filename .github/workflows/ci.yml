@@ -31,18 +31,69 @@ jobs:
           pip install python-dotenv
           sudo gem install dotenv --no-document
 
-      - name: Every engine must be available
-        # The engine tests skip themselves when a parser is missing, so without
-        # this the suite would go green having compared nothing. A skipped
-        # engine is silence, and silence reads the same as agreement.
+      - name: Every engine's runtime must be on PATH
+        # Layer one of two. This step used to be the whole check, named "Every
+        # engine must be available", and it could not do that job:
+        # --list-engines answers for the *runtime* only and says so in its own
+        # last two lines. On a box with node, python3, ruby, docker and bash
+        # present but not one of the three parser libraries installed, it
+        # prints six engines "ready", this step passes, 31 of 147 tests skip
+        # and the suite exits 0. The library layer is the next step.
         run: |
           envdrift --list-engines
+
           if envdrift --list-engines | grep -q unavailable; then
-            echo "::error::an engine is unavailable; the engine tests would skip"
+            echo "::error::an engine's runtime is missing; the engine tests would skip"
             exit 1
           fi
 
+          # The witness, per logbook#64. The check above passes when its
+          # pattern is absent, so on its own it also passes if --list-engines
+          # stops being able to print "unavailable" at all. This is the same
+          # grep against a control where it has to fire: an empty PATH.
+          control=$(env PATH=/var/empty "$(command -v envdrift)" --list-engines)
+          printf '%s\n' "$control"
+          printf '%s\n' "$control" | grep -q unavailable
+          # Five of six, and python-dotenv is the one that stays "ready" --
+          # its runtime is found by absolute path. That is the clearest
+          # statement there is of what this layer does not cover.
+          test "$(printf '%s\n' "$control" | grep -c 'unavailable — ')" -eq 5
+          printf '%s\n' "$control" | grep -qE '^python-dotenv  +ready$'
+
+      - name: Every parser library must load
+        # Layer two: the one --list-engines cannot see. Only a run finds out
+        # whether the `dotenv` gem and the `dotenv` package are really there,
+        # so this asserts on a run. --require-engines turns an engine that
+        # never ran into exit 2 instead of a footnote under "not available".
+        run: |
+          work=$(mktemp -d)
+
+          code=0
+          envdrift --require-engines examples/readme.env > "$work/here.txt" || code=$?
+          cat "$work/here.txt"
+          # 1 is the example drifting, which is what it is for. 2 is
+          # --require-engines, or envdrift failing to run at all.
+          test "$code" -eq 1
+          grep -qxF 'examples/readme.env — 4 keys, 6 of 6 parsers read it' "$work/here.txt"
+          grep -qxF '3 of 4 keys differ between parsers' "$work/here.txt"
+
+          # Again from outside the repo, which is where most real .env files
+          # are, and the case npm-dotenv used to lose its own version in: it
+          # resolves `dotenv` from the file's directory, falls back to the
+          # helper's own, and then asked the resolver that had just failed.
+          cp examples/readme.env "$work/readme.env"
+          code=0
+          envdrift --require-engines "$work/readme.env" > "$work/away.txt" || code=$?
+          cat "$work/away.txt"
+          test "$code" -eq 1
+          grep -qE '^parsers: npm-dotenv [0-9]+\..*python-dotenv [0-9]+\..*ruby-dotenv [0-9]+\.' "$work/away.txt"
+
       - name: Tests
+        # A skipped engine test is silence, and silence reads the same as
+        # agreement. Unset, those skips are the right trade on a laptop with
+        # no ruby; here they are a suite going green having compared nothing.
+        env:
+          ENVDRIFT_REQUIRE_ENGINES: 1
         run: pytest -rs
 
   lint:

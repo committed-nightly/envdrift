@@ -31,16 +31,18 @@ and envdrift uses whichever ones are already installed. `envdrift
 
 ## Use it
 
+The file is `examples/readme.env` in this repo, so you can run exactly this:
+
 ```
-$ cat .env
+$ cat examples/readme.env
 # staging
 DB_PASSWORD=s3cr#t
 API_URL="https://api.example.com/v1"
 GREETING="hello\nworld"
 CACHE_TTL = 300
 
-$ envdrift .env
-.env — 4 keys, 6 of 6 parsers read it
+$ envdrift examples/readme.env
+examples/readme.env — 4 keys, 6 of 6 parsers read it
 
   CACHE_TTL  —  2 outcomes
       '300'      node, npm-dotenv, python-dotenv, ruby-dotenv, compose
@@ -49,10 +51,10 @@ $ envdrift .env
       's3cr'     node, npm-dotenv, ruby-dotenv
       's3cr#t'   python-dotenv, compose, bash
   GREETING  —  2 outcomes
-      'hello\nworld'    node, npm-dotenv, python-dotenv, ruby-dotenv, compose
-      'hello\\nworld'   bash
+      'hello\nworld'    node, npm-dotenv, python-dotenv, compose
+      'hello\\nworld'   ruby-dotenv, bash
 
-parsers: npm-dotenv 18.0.4, python-dotenv 1.2.3, ruby-dotenv 2.8.1
+parsers: npm-dotenv 18.0.10, python-dotenv 1.2.4, ruby-dotenv 3.2.0
 
 read the file, and complained
   bash  sourced, exit 127: line 5: CACHE_TTL: command not found
@@ -62,11 +64,25 @@ read the file, and complained
 
 Three of those six parsers think the password is `s3cr`.
 
+Which side of `GREETING` `ruby-dotenv` falls on depends on which `dotenv` gem
+you have — 2.x expands `\n` inside double quotes and 3.x does not, which is
+[a parser disagreeing with itself](#a-parser-can-also-disagree-with-itself).
+That is why the `parsers:` line exists and why this output is not pinned
+byte-for-byte in CI.
+
 Exit status is `0` when every parser that read the file agreed about every key
 and none had to be held back, `1` when they drift or a parser was held back
 from a file it would execute, and `2` when envdrift could not do its job —
 including when fewer than two parsers were available, because one parser
 agreeing with itself is not agreement.
+
+If you want "all six, or tell me", that is `--require-engines`: it exits `2`
+and names each engine that never ran. Without it an engine that was not
+installed is a footnote under *not available* near the end of the report, and
+a run with five of six parsers exits on whether those five agreed — which
+reads, to anything downstream, exactly like a run where everyone answered.
+Engines deliberately *held back* from a file they would execute do not count;
+that is a `1`, and it is the headline.
 
 ```
 envdrift .env                      # just the disagreements
@@ -75,6 +91,7 @@ envdrift --redact .env             # digests instead of values
 envdrift --json .env               # for something other than a person
 envdrift --engines node,compose .env
 envdrift --list-engines
+envdrift --require-engines .env   # exit 2 unless all six actually ran
 ```
 
 ## Redacting the values
@@ -253,7 +270,13 @@ run. That is the trade.
   spread; which two ends of it matter is your call.
 - It only compares the parsers installed on the machine it runs on. Six
   agreeing on a box with three of them installed is not six agreeing, which is
-  why an absent parser is printed rather than omitted.
+  why an absent parser is printed rather than omitted — and why
+  `--require-engines` exists for callers that would rather not read the report
+  to find out.
+- `--list-engines` answers for the *runtime* only. `node` being on `PATH` is
+  not the npm `dotenv` package being installed, and the only way to find out
+  about the library is to run it. So `--list-engines` can print six engines
+  `ready` on a box where not one of the three parser libraries is there.
 
 ## Tests
 
@@ -267,6 +290,20 @@ and `test_redact.py` need nothing installed. `test_engines.py` runs the real
 parsers, and each case skips itself when its engine is missing — so a clean run
 on a bare box is mostly skips, and `pytest -rs` will tell you what you are not
 covering.
+
+That trade is right on a laptop and wrong in CI, where a suite that skipped
+every engine case prints `0 failed` and exits 0 having compared nothing. Set
+`ENVDRIFT_REQUIRE_ENGINES=1` and each of those skips becomes a failure naming
+the engine and the reason:
+
+```
+pytest                              # missing parser -> skip
+ENVDRIFT_REQUIRE_ENGINES=1 pytest   # missing parser -> failure
+```
+
+CI sets it. On a box with all five runtimes but none of the three parser
+libraries, `pytest` is `116 passed, 31 skipped` and exit 0; with the variable
+set it is `31 failed`.
 
 To get all six locally: `npm install dotenv`, `pip install python-dotenv`,
 `gem install dotenv`, and Docker.
