@@ -261,3 +261,21 @@ def test_python_dotenv_distinguishes_a_bare_key(envfile):
     result = parse("python-dotenv", envfile("A\nB=2\n"))
     assert "A" not in result.values
     assert result.valueless_keys == ("A",)
+
+
+@pytest.mark.engine
+def test_npm_dotenv_reports_its_version_from_outside_a_project(envfile):
+    """The resolver that found `dotenv` is the one that can answer for it.
+
+    The file is in tmp_path, so `dotenv` does not resolve from its directory
+    and the helper falls back to resolving from its own. It then asked the
+    *failed* resolver for the version and got null every time -- so every run
+    on a file outside a project with dotenv installed, which is most of the
+    runs this tool is for, quietly dropped npm-dotenv from the `parsers:`
+    line. report.py argues on its own line 60 that the version is half the
+    answer, so losing it is not cosmetic.
+    """
+    result = parse("npm-dotenv", envfile("A=1\n"))
+    assert result.values == {"A": "1"}
+    assert result.version is not None, "npm-dotenv ran but reported no version"
+    assert result.version[0].isdigit(), result.version

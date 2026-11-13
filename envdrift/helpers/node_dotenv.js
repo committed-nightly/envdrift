@@ -10,12 +10,17 @@ function out(o) { process.stdout.write(JSON.stringify(o)); }
 const target = process.argv[2];
 const from = createRequire(path.join(path.resolve(path.dirname(target)), 'noop.js'));
 
+// Whichever of the two resolvers actually found dotenv is the one that can
+// answer for its version. Asking `from` after falling back to `require` gets
+// null every time, because `from` is the one that just failed.
 let dotenv;
+let resolver = from;
 try {
   dotenv = from('dotenv');
 } catch (e) {
   try {
     dotenv = require('dotenv');
+    resolver = require;
   } catch (e2) {
     out({ unavailable: 'the `dotenv` package does not resolve from ' + path.dirname(target) });
     process.exit(0);
@@ -23,7 +28,7 @@ try {
 }
 
 try {
-  out({ values: dotenv.parse(fs.readFileSync(target)), version: versionOf(from) });
+  out({ values: dotenv.parse(fs.readFileSync(target)), version: versionOf(resolver) });
 } catch (e) {
   out({ error: String((e && e.message) || e) });
 }
