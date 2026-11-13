@@ -3,7 +3,8 @@
 Exit codes:
   0  every parser that read the file agreed about every key
   1  the parsers disagree, or some read the file and others rejected it
-  2  envdrift could not do its job (no such file, no engines, bad arguments)
+  2  envdrift could not do its job (no such file, no engines, bad arguments,
+     or --require-engines and an engine never ran)
 """
 
 from __future__ import annotations
@@ -54,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="show_all",
         help="print every key, not only the ones the parsers disagree about",
+    )
+    parser.add_argument(
+        "--require-engines",
+        action="store_true",
+        help="exit 2 if any selected engine could not run at all",
     )
     parser.add_argument(
         "--unsafe",
@@ -146,6 +152,17 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         out.write(report.to_json(result, redactor=redactor))
     else:
         out.write(report.to_text(result, show_all=args.show_all, redactor=redactor))
+
+    # Before the "fewer than two parsers" check below, because this says which
+    # engines went missing and that one only says how many are left.
+    if args.require_engines and result.unavailable:
+        for missing in sorted(result.unavailable, key=lambda r: r.engine):
+            err.write(f"envdrift: {missing.engine}: {missing.unavailable}\n")
+        err.write(
+            f"envdrift: --require-engines: {len(result.unavailable)} of "
+            f"{len(engines)} engines never ran\n"
+        )
+        return 2
 
     # One engine agreeing with itself is not agreement. Exiting 0 there would
     # report a box with nothing installed on it as a clean bill of health, which
