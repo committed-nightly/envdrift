@@ -3,8 +3,10 @@ import json
 
 import pytest
 
-from envdrift import cli
+from envdrift import cli, engines
 from envdrift.redact import SALT_ENV
+
+from .conftest import absent
 
 
 def run(argv):
@@ -172,4 +174,80 @@ def test_a_file_that_would_be_executed_exits_nonzero(envfile):
     if code == 2:
         pytest.skip(err.strip())
     assert code == 1, out
+    assert "held back" in out
+
+
+# --- --require-engines ------------------------------------------------------
+#
+# The flag exists because an engine that never ran is reported in a section
+# near the end of the report and nowhere in the exit code, so a caller that
+# reads either one cannot tell a six-parser comparison from a three-parser
+# one. See ci.yml, which used to try to answer this with --list-engines.
+
+
+@pytest.fixture
+def no_runtimes(monkeypatch):
+    """A box with none of the engine runtimes on it."""
+    monkeypatch.setattr(engines.shutil, "which", lambda cmd: None)
+
+
+def test_require_engines_names_every_engine_that_never_ran(no_runtimes, envfile):
+    path = envfile("A=1\n")
+    code, _, err = run(["--require-engines", str(path)])
+    assert code == 2
+    for name in ("node", "npm-dotenv", "python-dotenv", "ruby-dotenv", "compose", "bash"):
+        assert name in err, f"{name} never ran and was not named"
+    assert "6 of 6 engines never ran" in err
+
+
+def test_without_require_engines_the_same_box_reports_only_the_shortfall(
+    no_runtimes, envfile
+):
+    """The control for the test above: the flag is what produces the names."""
+    path = envfile("A=1\n")
+    code, _, err = run([str(path)])
+    assert code == 2
+    assert "no parser read this file" in err
+    assert "never ran" not in err
+    assert "ruby-dotenv" not in err
+
+
+def test_require_engines_changes_the_exit_code_of_an_otherwise_fine_run(
+    monkeypatch, envfile
+):
+    """One missing engine, the rest working: plain exits 0 or 1, flag exits 2.
+
+    This is the case the ci.yml guard was aimed at and missed. A run with five
+    of six parsers is still a comparison, so it exits on whether they agreed
+    -- and the parser that was never asked is a footnote.
+    """
+    others = [e for e in engines.ENGINES if e.name != "ruby-dotenv"]
+    runnable = [e for e in others if e.available() is None]
+    if len(runnable) < 2:
+        absent("ruby-dotenv", "needs two other runnable engines to compare against")
+
+    real_which = engines.shutil.which
+    monkeypatch.setattr(
+        engines.shutil, "which", lambda cmd: None if cmd == "ruby" else real_which(cmd)
+    )
+    path = envfile("A=1\n")
+
+    plain, _, _ = run([str(path)])
+    assert plain in (0, 1), f"expected a normal-looking run, got {plain}"
+
+    code, _, err = run(["--require-engines", str(path)])
+    assert code == 2
+    assert "ruby-dotenv: ruby is not on PATH" in err
+    assert "1 of 6 engines never ran" in err
+
+
+def test_require_engines_does_not_count_a_held_back_engine(envfile):
+    """Holding bash and ruby-dotenv back from `$(...)` is deliberate."""
+    if engines.BY_NAME["bash"].available() is not None:
+        absent("bash", "bash is not on PATH")
+    path = envfile("A=$(id -u)\n")
+    code, out, err = run(["--require-engines", str(path)])
+    assert "never ran" not in err, err
+    # Held back is notable in its own right, which is a 1 and not a 2.
+    assert code == 1
     assert "held back" in out
