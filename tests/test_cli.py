@@ -3,8 +3,10 @@ import json
 
 import pytest
 
-from envdrift import cli
+from envdrift import cli, engines, hazards
 from envdrift.redact import SALT_ENV
+
+from .conftest import absent, parse
 
 
 def run(argv):
@@ -172,4 +174,102 @@ def test_a_file_that_would_be_executed_exits_nonzero(envfile):
     if code == 2:
         pytest.skip(err.strip())
     assert code == 1, out
+    assert "held back" in out
+
+
+# --- --require-engines ------------------------------------------------------
+#
+# The flag exists because an engine that never ran is reported in a section
+# near the end of the report and nowhere in the exit code, so a caller that
+# reads either one cannot tell a six-parser comparison from a three-parser
+# one. See ci.yml, which used to try to answer this with --list-engines.
+
+
+@pytest.fixture
+def no_runtimes(monkeypatch):
+    """A box with none of the engine runtimes on it."""
+    monkeypatch.setattr(engines.shutil, "which", lambda cmd: None)
+
+
+def test_require_engines_names_every_engine_that_never_ran(no_runtimes, envfile):
+    path = envfile("A=1\n")
+    code, _, err = run(["--require-engines", str(path)])
+    assert code == 2
+    for name in ("node", "npm-dotenv", "python-dotenv", "ruby-dotenv", "compose", "bash"):
+        assert name in err, f"{name} never ran and was not named"
+    assert "6 of 6 engines never ran" in err
+
+
+def test_without_require_engines_the_same_box_reports_only_the_shortfall(
+    no_runtimes, envfile
+):
+    """The control for the test above: the flag is what produces the names."""
+    path = envfile("A=1\n")
+    code, _, err = run([str(path)])
+    assert code == 2
+    assert "no parser read this file" in err
+    assert "never ran" not in err
+    assert "ruby-dotenv" not in err
+
+
+def test_require_engines_changes_the_exit_code_of_an_otherwise_fine_run(
+    monkeypatch, envfile
+):
+    """One missing engine, the rest working: plain exits 0 or 1, flag exits 2.
+
+    This is the case the ci.yml guard was aimed at and missed. A run with five
+    of six parsers is still a comparison, so it exits on whether they agreed
+    -- and the parser that was never asked is a footnote.
+    """
+    path = envfile("A=1\n")
+
+    # Every other engine has to genuinely run, or `1 of 6` below is `2 of 6`
+    # and this test goes red for a missing library rather than for the thing it
+    # is named after. `available()` cannot establish that -- it answers for the
+    # runtime on PATH, which is the gap this whole change exists to close -- so
+    # run each one, the way conftest.parse does, and skip on whichever is
+    # really not there.
+    for engine in engines.ENGINES:
+        if engine.name != "ruby-dotenv":
+            parse(engine.name, path)
+
+    real_which = engines.shutil.which
+    monkeypatch.setattr(
+        engines.shutil, "which", lambda cmd: None if cmd == "ruby" else real_which(cmd)
+    )
+
+    plain, _, _ = run([str(path)])
+    assert plain in (0, 1), f"expected a normal-looking run, got {plain}"
+
+    code, _, err = run(["--require-engines", str(path)])
+    assert code == 2
+    assert "ruby-dotenv: ruby is not on PATH" in err
+    assert "1 of 6 engines never ran" in err
+
+
+def test_require_engines_does_not_count_a_held_back_engine(envfile):
+    """Holding bash and ruby-dotenv back from `$(...)` is deliberate."""
+    path = envfile("A=$(id -u)\n")
+    found = hazards.scan(path.read_text())
+    # A file with no `$(` in it, so nothing is held back from the probe and the
+    # probe never executes the construct this file exists to withhold.
+    probe = envfile("A=1\n", name="probe.env")
+    for engine in engines.ENGINES:
+        if hazards.held_back_reason(engine, found) is not None:
+            # Held back from this file, so its library is never consulted and a
+            # missing one is no reason to skip. The runtime still is:
+            # compare.run_all checks available() before it checks hazards, so
+            # an engine with no runtime lands in `never ran`, not `held back`.
+            why = engine.available()
+            if why is not None:
+                absent(engine.name, why)
+        else:
+            # This one gets run for real, and only running it says whether its
+            # library loads -- an engine that cannot load one also lands in
+            # `never ran`, which is what the assertion below reads.
+            parse(engine.name, probe)
+    code, out, err = run(["--require-engines", str(path)])
+    assert "never ran" not in err, err
+    # Held back is notable in its own right, which is a 1 and not a 2.
+    assert code == 1
     assert "held back" in out

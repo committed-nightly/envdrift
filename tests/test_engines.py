@@ -5,14 +5,16 @@ README quotes these same cases. If one of these starts failing it means a
 parser changed its mind, which is exactly the thing envdrift exists to notice
 -- so the test failing is the correct outcome, not a flake to paper over.
 
-Each case skips rather than fails when its engine is not installed.
+Each case skips rather than fails when its engine is not installed -- unless
+ENVDRIFT_REQUIRE_ENGINES is set, which CI does, because a suite that skipped
+every engine goes green having compared nothing.
 """
 
 import pytest
 
 from envdrift.engines import BY_NAME
 
-from .conftest import parse
+from .conftest import absent, parse, unavailable
 
 ABSENT = object()
 REJECTED = object()
@@ -178,11 +180,6 @@ def _cases():
 @pytest.mark.engine
 @pytest.mark.parametrize("body,engine_name,want", list(_cases()))
 def test_engine_behaviour(envfile, body, engine_name, want):
-    engine = BY_NAME[engine_name]
-    why = engine.available()
-    if why is not None:
-        pytest.skip(f"{engine_name}: {why}")
-
     result = parse(engine_name, envfile(body))
 
     if want is REJECTED:
@@ -212,11 +209,10 @@ def test_engine_behaviour(envfile, body, engine_name, want):
 @pytest.mark.engine
 def test_compose_does_not_report_a_dollar_the_file_does_not_contain(envfile):
     """`docker compose config` doubles every literal `$` on the way out."""
-    engine = BY_NAME["compose"]
-    if engine.available() is not None:
-        pytest.skip("docker is not installed")
     result = parse("compose", envfile("A=100$\nB=a$$b\n"))
     if result.error:
+        # Not an availability question: docker is here and compose answered,
+        # it just could not do it (no daemon, for instance).
         pytest.skip(f"compose: {result.error}")
     assert result.values["A"] == "100$"
     assert result.values["B"] == "a$b"
@@ -224,8 +220,6 @@ def test_compose_does_not_report_a_dollar_the_file_does_not_contain(envfile):
 
 @pytest.mark.engine
 def test_bash_reports_the_line_it_could_not_run(envfile):
-    if BY_NAME["bash"].available() is not None:
-        pytest.skip("bash is not installed")
     result = parse("bash", envfile("A=a b\nC=ok\n"))
     # `.` returns the status of the *last* line, which succeeded, so a non-zero
     # exit is not what gives this away -- the complaint on stderr is.
@@ -237,8 +231,6 @@ def test_bash_reports_the_line_it_could_not_run(envfile):
 @pytest.mark.engine
 def test_bash_does_not_leak_envdrifts_own_variables(envfile):
     """The helper runs under `set -a`; anything it assigns would be exported."""
-    if BY_NAME["bash"].available() is not None:
-        pytest.skip("bash is not installed")
     result = parse("bash", envfile("A=1\n"))
     assert result.values == {"A": "1"}
 
@@ -246,8 +238,6 @@ def test_bash_does_not_leak_envdrifts_own_variables(envfile):
 @pytest.mark.engine
 def test_bash_starts_from_an_empty_environment(envfile, monkeypatch):
     """A value that interpolates a host variable must not pick one up."""
-    if BY_NAME["bash"].available() is not None:
-        pytest.skip("bash is not installed")
     monkeypatch.setenv("ENVDRIFT_SHOULD_NOT_LEAK", "leaked")
     result = parse("bash", envfile('A="${ENVDRIFT_SHOULD_NOT_LEAK:-unset}"\n'))
     assert result.values["A"] == "unset"
@@ -258,8 +248,9 @@ def test_a_file_a_parser_cannot_read_is_an_error_not_a_crash(envfile):
     """Whatever happens, an engine returns a Result."""
     path = envfile('A="oops\n')
     for name in BY_NAME:
-        if BY_NAME[name].available() is not None:
-            continue
+        why = unavailable(name)
+        if why is not None:
+            absent(name, why)
         result = BY_NAME[name].run(path)
         assert result.engine == name
         assert result.values is not None or result.error or result.unavailable
@@ -270,3 +261,21 @@ def test_python_dotenv_distinguishes_a_bare_key(envfile):
     result = parse("python-dotenv", envfile("A\nB=2\n"))
     assert "A" not in result.values
     assert result.valueless_keys == ("A",)
+
+
+@pytest.mark.engine
+def test_npm_dotenv_reports_its_version_from_outside_a_project(envfile):
+    """The resolver that found `dotenv` is the one that can answer for it.
+
+    The file is in tmp_path, so `dotenv` does not resolve from its directory
+    and the helper falls back to resolving from its own. It then asked the
+    *failed* resolver for the version and got null every time -- so every run
+    on a file outside a project with dotenv installed, which is most of the
+    runs this tool is for, quietly dropped npm-dotenv from the `parsers:`
+    line. report.py argues on its own line 60 that the version is half the
+    answer, so losing it is not cosmetic.
+    """
+    result = parse("npm-dotenv", envfile("A=1\n"))
+    assert result.values == {"A": "1"}
+    assert result.version is not None, "npm-dotenv ran but reported no version"
+    assert result.version[0].isdigit(), result.version
