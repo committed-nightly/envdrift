@@ -3,10 +3,10 @@ import json
 
 import pytest
 
-from envdrift import cli, engines
+from envdrift import cli, engines, hazards
 from envdrift.redact import SALT_ENV
 
-from .conftest import absent
+from .conftest import absent, parse
 
 
 def run(argv):
@@ -221,16 +221,22 @@ def test_require_engines_changes_the_exit_code_of_an_otherwise_fine_run(
     of six parsers is still a comparison, so it exits on whether they agreed
     -- and the parser that was never asked is a footnote.
     """
-    others = [e for e in engines.ENGINES if e.name != "ruby-dotenv"]
-    runnable = [e for e in others if e.available() is None]
-    if len(runnable) < 2:
-        absent("ruby-dotenv", "needs two other runnable engines to compare against")
+    path = envfile("A=1\n")
+
+    # Every other engine has to genuinely run, or `1 of 6` below is `2 of 6`
+    # and this test goes red for a missing library rather than for the thing it
+    # is named after. `available()` cannot establish that -- it answers for the
+    # runtime on PATH, which is the gap this whole change exists to close -- so
+    # run each one, the way conftest.parse does, and skip on whichever is
+    # really not there.
+    for engine in engines.ENGINES:
+        if engine.name != "ruby-dotenv":
+            parse(engine.name, path)
 
     real_which = engines.shutil.which
     monkeypatch.setattr(
         engines.shutil, "which", lambda cmd: None if cmd == "ruby" else real_which(cmd)
     )
-    path = envfile("A=1\n")
 
     plain, _, _ = run([str(path)])
     assert plain in (0, 1), f"expected a normal-looking run, got {plain}"
@@ -243,9 +249,25 @@ def test_require_engines_changes_the_exit_code_of_an_otherwise_fine_run(
 
 def test_require_engines_does_not_count_a_held_back_engine(envfile):
     """Holding bash and ruby-dotenv back from `$(...)` is deliberate."""
-    if engines.BY_NAME["bash"].available() is not None:
-        absent("bash", "bash is not on PATH")
     path = envfile("A=$(id -u)\n")
+    found = hazards.scan(path.read_text())
+    # A file with no `$(` in it, so nothing is held back from the probe and the
+    # probe never executes the construct this file exists to withhold.
+    probe = envfile("A=1\n", name="probe.env")
+    for engine in engines.ENGINES:
+        if hazards.held_back_reason(engine, found) is not None:
+            # Held back from this file, so its library is never consulted and a
+            # missing one is no reason to skip. The runtime still is:
+            # compare.run_all checks available() before it checks hazards, so
+            # an engine with no runtime lands in `never ran`, not `held back`.
+            why = engine.available()
+            if why is not None:
+                absent(engine.name, why)
+        else:
+            # This one gets run for real, and only running it says whether its
+            # library loads -- an engine that cannot load one also lands in
+            # `never ran`, which is what the assertion below reads.
+            parse(engine.name, probe)
     code, out, err = run(["--require-engines", str(path)])
     assert "never ran" not in err, err
     # Held back is notable in its own right, which is a 1 and not a 2.
