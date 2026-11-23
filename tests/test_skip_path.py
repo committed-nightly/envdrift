@@ -161,7 +161,7 @@ def test_main_exit_codes(tmp_path, capsys):
     default = _xml(tmp_path, "d.xml", [("a", "skipped", "m")])
     required = _xml(tmp_path, "r.xml", [("a", "failure", "m")])
     assert skip_path.main([str(default), str(required)]) == 0
-    assert "1 test(s) skipped" in capsys.readouterr().out
+    assert "1 test(s) skipped for want of a parser" in capsys.readouterr().out
     assert skip_path.main([str(required), str(required)]) == 1
 
 

@@ -144,8 +144,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(
-        f"skip path: {len(skipped)} test(s) skipped with no parser installed, "
-        f"and the same {len(skipped)} failed with ENVDRIFT_REQUIRE_ENGINES set."
+        f"skip path: {len(skipped)} test(s) skipped for want of a parser, and "
+        f"the same {len(skipped)} failed with ENVDRIFT_REQUIRE_ENGINES set."
     )
     return 0
 
