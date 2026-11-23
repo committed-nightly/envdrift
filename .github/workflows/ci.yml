@@ -96,6 +96,83 @@ jobs:
           ENVDRIFT_REQUIRE_ENGINES: 1
         run: pytest -rs
 
+  bare:
+    # logbook#72. Every step in `test` installs the three parser libraries
+    # before pytest runs, so `conftest.absent()` -- the branch that decides
+    # between skipping and failing -- has never been executed by CI. That is
+    # not a hypothetical gap: envdrift#2 shipped two tests that *failed*
+    # where they should have skipped, and CI was green on that commit. A
+    # human running the suite in a fresh venv is what caught it.
+    #
+    # This job installs nothing but the test extra, which is the box the
+    # README tells people to expect, and runs the suite both ways on it.
+    name: the box with no parsers on it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install envdrift and the test extra, and deliberately nothing else
+        # No npm dotenv, no python-dotenv, no dotenv gem. The five runtimes
+        # are on the runner image already, which is the point: this is the
+        # box where --list-engines says six engines are ready and not one of
+        # the parser libraries is installed.
+        run: pip install -e '.[test]'
+
+      - name: The skip path must run, and the switch must reach every skip
+        run: |
+          work=$(mktemp -d)
+
+          # Direction one: the laptop trade. A missing parser is silence, and
+          # the suite is still green.
+          code=0
+          pytest -q --junit-xml="$work/default.xml" || code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "::error::the suite is not green on a box with no parser libraries"
+            exit 1
+          fi
+
+          # Direction two: the CI trade. The same box, told to require them.
+          code=0
+          ENVDRIFT_REQUIRE_ENGINES=1 pytest -q --junit-xml="$work/required.xml" || code=$?
+          if [ "$code" -ne 1 ]; then
+            echo "::error::expected test failures with ENVDRIFT_REQUIRE_ENGINES=1, got exit $code"
+            exit 1
+          fi
+
+          # Neither exit code is an assertion on its own. Both are also what a
+          # suite that quietly stopped skipping would produce. This compares
+          # the two runs by test id.
+          python3 tools/skip_path.py "$work/default.xml" "$work/required.xml"
+
+      - name: The witness -- with the parsers installed, that check must refuse
+        # Per logbook#64: a check that has only ever been seen passing is not
+        # known to be capable of failing. Same box, same tree, same command,
+        # with the one thing it is measuring changed. If it still passes here
+        # it was never reading the skips at all.
+        run: |
+          npm install dotenv --no-save --no-fund --no-audit
+          pip install python-dotenv
+          sudo gem install dotenv --no-document
+
+          work=$(mktemp -d)
+          pytest -q --junit-xml="$work/default.xml"
+          ENVDRIFT_REQUIRE_ENGINES=1 pytest -q --junit-xml="$work/required.xml"
+
+          code=0
+          python3 tools/skip_path.py "$work/default.xml" "$work/required.xml" \
+            > "$work/out.txt" 2> "$work/err.txt" || code=$?
+          cat "$work/out.txt" "$work/err.txt"
+
+          if [ "$code" -ne 1 ]; then
+            echo "::error::skip_path.py passed on a fully installed box; it is not reading the skips"
+            exit 1
+          fi
+          grep -qF 'nothing skipped in the default run' "$work/err.txt"
+
   lint:
     runs-on: ubuntu-latest
     steps:
