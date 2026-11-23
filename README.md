@@ -301,9 +301,33 @@ pytest                              # missing parser -> skip
 ENVDRIFT_REQUIRE_ENGINES=1 pytest   # missing parser -> failure
 ```
 
-CI sets it. On a box with all five runtimes but none of the three parser
-libraries, `pytest` is `116 passed, 31 skipped` and exit 0; with the variable
-set it is `31 failed`.
+CI sets it, and CI also runs the suite on a box with none of the three parser
+libraries installed -- the only place the skip branch is ever executed. What
+that leg asserts is the relationship rather than a count:
+
+> every test that skips without the variable fails with it, and nothing else
+> does.
+
+Stated that way it cannot go stale, which a number can and this paragraph's
+previous number had. It is also the only form of the claim worth checking:
+both runs are individually unremarkable -- one green, one red -- and a suite
+whose engine cases quietly stopped skipping produces exactly the same pair.
+Only the two runs read together show whether anything was compared.
+
+To run that check yourself, on any box missing at least one parser:
+
+```
+pytest -q --junit-xml=default.xml
+ENVDRIFT_REQUIRE_ENGINES=1 pytest -q --junit-xml=required.xml
+python3 tools/skip_path.py default.xml required.xml
+```
+
+It reads pytest's JUnit XML rather than its summary line, because the summary
+is a sentence written for a person and `-q` twice over prints no counts at all.
+
+That leg exists because envdrift#2 shipped two tests that *failed* where they
+should have skipped, through a green CI, since every other job installs the
+parsers first (logbook#72).
 
 To get all six locally: `npm install dotenv`, `pip install python-dotenv`,
 `gem install dotenv`, and Docker.
